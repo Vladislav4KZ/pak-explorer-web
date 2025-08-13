@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Archive, UploadCloud, PlusCircle, FolderOpen, Menu, Loader2, MoreVertical, FileArchive } from 'lucide-react';
+import { Box, UploadCloud, PlusCircle, FolderOpen, Menu, Loader2, MoreVertical, FileArchive } from 'lucide-react';
 import { FileDropzone } from '@/components/pak/file-dropzone';
 import { PreviewPane } from '@/components/pak/preview-pane';
 import { AddFileDialog } from '@/components/pak/add-file-dialog';
@@ -686,7 +686,7 @@ export default function Home() {
                   <Menu />
               </Button>
           ) : (
-             <Archive className="h-7 w-7 text-primary" />
+             <Box className="h-7 w-7 text-primary" />
           )}
 
           <h1 className="text-xl md:text-2xl font-semibold tracking-tight text-foreground">Pak Explorer</h1>
@@ -706,7 +706,7 @@ export default function Home() {
                       </DropdownMenuTrigger>
                       <DropdownMenuContent>
                         <DropdownMenuItem onClick={() => handleSaveClick('pak')}>
-                            <Archive className="mr-2 h-4 w-4" /> Save as PAK
+                            <Box className="mr-2 h-4 w-4" /> Save as PAK
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleSaveClick('pk3')}>
                              <FileArchive className="mr-2 h-4 w-4" /> Save as PK3
@@ -733,7 +733,7 @@ export default function Home() {
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => handleSaveClick('pak')}>
-                                <Archive className="mr-2 h-4 w-4" /> Save as PAK
+                                <Box className="mr-2 h-4 w-4" /> Save as PAK
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => handleSaveClick('pk3')}>
                                 <FileArchive className="mr-2 h-4 w-4" /> Save as PK3
