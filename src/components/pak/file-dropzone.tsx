@@ -1,20 +1,22 @@
 
 'use client';
 
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
-import { useIsMobile } from '@/hooks/use-mobile';
+import { cn } from '@/lib/utils';
 
 interface FileDropzoneProps {
   onFileLoad: (file: File) => void;
-  onItemDrop: (item: DataTransferItem) => void;
+  onItemDrop: (items: DataTransferItemList) => void;
   icon: React.ReactNode;
+  message: React.ReactNode;
   accept?: string;
 }
 
-export function FileDropzone({ onFileLoad, onItemDrop, icon, accept }: FileDropzoneProps) {
+export function FileDropzone({ onFileLoad, onItemDrop, icon, message, accept }: FileDropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const isMobile = useIsMobile();
+  const [isDragOver, setIsDragOver] = useState(false);
+
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
@@ -26,6 +28,7 @@ export function FileDropzone({ onFileLoad, onItemDrop, icon, accept }: FileDropz
     (event: React.DragEvent<HTMLDivElement>) => {
       event.preventDefault();
       event.stopPropagation();
+      setIsDragOver(false);
       
       if (event.dataTransfer.items && event.dataTransfer.items.length > 0) {
         const firstItem = event.dataTransfer.items[0];
@@ -41,7 +44,7 @@ export function FileDropzone({ onFileLoad, onItemDrop, icon, accept }: FileDropz
            onFileLoad(event.dataTransfer.files[0]);
         } else {
            // Handle as file/folder to add to a new archive
-           onItemDrop(firstItem);
+           onItemDrop(event.dataTransfer.items);
         }
       }
     },
@@ -51,6 +54,13 @@ export function FileDropzone({ onFileLoad, onItemDrop, icon, accept }: FileDropz
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    setIsDragOver(true);
+  };
+  
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragOver(false);
   };
 
   const handleClick = () => {
@@ -59,19 +69,17 @@ export function FileDropzone({ onFileLoad, onItemDrop, icon, accept }: FileDropz
 
   return (
     <Card
-      className="w-full max-w-lg cursor-pointer border-2 border-dashed bg-muted/50 transition-colors hover:border-primary hover:bg-muted"
+      className={cn("w-full max-w-lg cursor-pointer border-2 border-dashed bg-muted/50 transition-colors hover:border-primary",
+        isDragOver && "border-primary bg-primary/10 ring-2 ring-primary/50"
+      )}
       onClick={handleClick}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
     >
       <CardContent className="flex flex-col items-center justify-center space-y-4 p-12 text-center">
         <div className="text-primary">{icon}</div>
-        <div className="text-center text-muted-foreground">
-            <p className="font-semibold text-foreground">
-              {isMobile ? 'Tap to open an archive' : 'Drag & drop an archive here to open'}
-            </p>
-            {!isMobile && <p className="text-sm">or drop files/folders to create a new one</p>}
-        </div>
+        {message}
         <input
           ref={inputRef}
           type="file"
@@ -83,5 +91,3 @@ export function FileDropzone({ onFileLoad, onItemDrop, icon, accept }: FileDropz
     </Card>
   );
 }
-
-    

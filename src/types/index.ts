@@ -51,4 +51,9 @@ export interface SprData {
     frames: SprFrame[];
 }
 
+export interface ConflictFile {
+    newFile: PakFileEntry;
+    existingFile: PakFileEntry;
+}
+
     

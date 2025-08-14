@@ -28,8 +28,9 @@ interface FileTreeProps {
   clipboard: ClipboardItem;
   onClipboardAction: (type: 'copy' | 'cut', itemType: 'file' | 'folder', path: string) => void;
   onPaste: (destPath: string) => void;
-  onFileDrop: (file: File, destPath?: string) => void;
-  onFolderDrop: (entry: FileSystemEntry, destPath?: string) => void;
+  onFileDrop: (file: File, destPath?: string) => Promise<PakFileEntry | null>;
+  onFolderDrop: (entry: FileSystemEntry, destPath?: string) => Promise<PakFileEntry[]>;
+  addBatchEntries: (entries: PakFileEntry[]) => void;
 }
 
 const getIcon = (name: string) => {
@@ -108,6 +109,7 @@ const FileTreeItem = ({
   onPaste,
   onFileDrop,
   onFolderDrop,
+  addBatchEntries,
 }: {
   node: FileTreeNode;
   onSelectFile: (file: PakFileEntry) => void;
@@ -120,8 +122,9 @@ const FileTreeItem = ({
   clipboard: ClipboardItem;
   onClipboardAction: (type: 'copy' | 'cut', itemType: 'file' | 'folder', path: string) => void;
   onPaste: (destPath: string) => void;
-  onFileDrop: (file: File, destPath?: string) => void;
-  onFolderDrop: (entry: FileSystemEntry, destPath?: string) => void;
+  onFileDrop: (file: File, destPath?: string) => Promise<PakFileEntry | null>;
+  onFolderDrop: (entry: FileSystemEntry, destPath?: string) => Promise<PakFileEntry[]>;
+  addBatchEntries: (entries: PakFileEntry[]) => void;
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isDropTarget, setIsDropTarget] = useState(false);
@@ -152,7 +155,7 @@ const FileTreeItem = ({
     setIsDropTarget(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDropTarget(false);
@@ -173,20 +176,24 @@ const FileTreeItem = ({
     }
     
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-      const items = Array.from(e.dataTransfer.items).map(item => item.webkitGetAsEntry());
-      if (items.length > 0 && items[0]) {
-          const handleEntry = (entry: FileSystemEntry | null) => {
-              if (!entry) return;
-                if (entry.isFile) {
-                  (entry as FileSystemFileEntry).file(file => {
-                      onFileDrop(file, node.path);
-                  });
-              } else if (entry.isDirectory) {
-                  onFolderDrop(entry, node.path);
-              }
-          };
-          
-          handleEntry(items[0]);
+      const items = Array.from(e.dataTransfer.items);
+      const entryPromises = items.map(item => {
+          const entry = item.webkitGetAsEntry();
+          if (!entry) return Promise.resolve(null);
+          if (entry.isFile) {
+              return new Promise<File>(res => (entry as FileSystemFileEntry).file(res))
+                  .then(file => onFileDrop(file, node.path));
+          } else if (entry.isDirectory) {
+              return onFolderDrop(entry, node.path);
+          }
+          return Promise.resolve(null);
+      });
+
+      const results = await Promise.all(entryPromises);
+      const newEntries = results.flat().filter((e): e is PakFileEntry => e !== null);
+      
+      if (newEntries.length > 0) {
+        addBatchEntries(newEntries);
       }
     }
   };
@@ -212,7 +219,7 @@ const FileTreeItem = ({
         data-dnd-target="item"
         className={cn('flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm',
         selectedPath === node.path ? 'bg-primary/20' : 'hover:bg-accent',
-        isDropTarget && 'bg-accent ring-2 ring-primary'
+        isDropTarget && 'bg-accent ring-1 ring-primary/50'
     )}>
         {node.type === 'folder' ? (
             <ChevronRight className={cn('h-4 w-4 shrink-0 transition-transform duration-200', isOpen && 'rotate-90')} />
@@ -300,6 +307,7 @@ const FileTreeItem = ({
                 onPaste={onPaste}
                 onFileDrop={onFileDrop}
                 onFolderDrop={onFolderDrop}
+                addBatchEntries={addBatchEntries}
             />
         </CollapsibleContent>
       </Collapsible>
@@ -333,7 +341,7 @@ const FileTreeBranch = ({ tree, parentPath, ...props }: Omit<FileTreeProps, 'tre
     });
     const [isDropTarget, setIsDropTarget] = useState(false);
 
-    const handleDrop = (e: React.DragEvent) => {
+    const handleDrop = async (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDropTarget(false);
@@ -352,11 +360,24 @@ const FileTreeBranch = ({ tree, parentPath, ...props }: Omit<FileTreeProps, 'tre
         }
 
         if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-            const entry = Array.from(e.dataTransfer.items)[0]?.webkitGetAsEntry();
-            if (entry?.isFile) {
-                (entry as FileSystemFileEntry).file(file => props.onFileDrop(file, parentPath));
-            } else if (entry?.isDirectory) {
-                props.onFolderDrop(entry, parentPath);
+            const items = Array.from(e.dataTransfer.items);
+            const entryPromises = items.map(item => {
+                const entry = item.webkitGetAsEntry();
+                if (!entry) return Promise.resolve(null);
+                if (entry.isFile) {
+                    return new Promise<File>(res => (entry as FileSystemFileEntry).file(res))
+                        .then(file => props.onFileDrop(file, parentPath));
+                } else if (entry.isDirectory) {
+                    return props.onFolderDrop(entry, parentPath);
+                }
+                return Promise.resolve(null);
+            });
+
+            const results = await Promise.all(entryPromises);
+            const newEntries = results.flat().filter((e): e is PakFileEntry => e !== null);
+            
+            if (newEntries.length > 0) {
+                props.addBatchEntries(newEntries);
             }
         }
     };
@@ -377,7 +398,7 @@ const FileTreeBranch = ({ tree, parentPath, ...props }: Omit<FileTreeProps, 'tre
 
     return (
         <div 
-          className={cn("space-y-1 py-1 pl-6", isDropTarget && 'bg-accent/50 rounded-md', props.className)}
+          className={cn("space-y-1 py-1 pl-6", isDropTarget && 'bg-accent/20 rounded-md', props.className)}
           onDrop={handleDrop}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -394,9 +415,9 @@ const FileTreeBranch = ({ tree, parentPath, ...props }: Omit<FileTreeProps, 'tre
 };
 
 
-export const FileTree = (props: FileTreeProps) => {
-  const { onFileDrop, onFolderDrop } = props;
-  const handleDrop = (e: React.DragEvent) => {
+export const FileTree = (props: Omit<FileTreeProps, 'addBatchEntries'> & { addBatchEntries: (entries: PakFileEntry[]) => void }) => {
+  const { onFileDrop, onFolderDrop, addBatchEntries } = props;
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -418,12 +439,24 @@ export const FileTree = (props: FileTreeProps) => {
     }
 
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-      const entry = e.dataTransfer.items[0].webkitGetAsEntry();
-      if (!entry) return;
-      if (entry.isFile) {
-         (entry as FileSystemFileEntry).file(file => onFileDrop(file, ''));
-      } else if (entry.isDirectory) {
-        onFolderDrop(entry, '');
+      const items = Array.from(e.dataTransfer.items);
+      const entryPromises = items.map(item => {
+          const entry = item.webkitGetAsEntry();
+          if (!entry) return Promise.resolve(null);
+          if (entry.isFile) {
+              return new Promise<File>(res => (entry as FileSystemFileEntry).file(res))
+                  .then(file => onFileDrop(file, ''));
+          } else if (entry.isDirectory) {
+              return onFolderDrop(entry, '');
+          }
+          return Promise.resolve(null);
+      });
+
+      const results = await Promise.all(entryPromises);
+      const newEntries = results.flat().filter((e): e is PakFileEntry => e !== null);
+      
+      if (newEntries.length > 0) {
+        addBatchEntries(newEntries);
       }
     }
   };
@@ -448,4 +481,3 @@ export const FileTree = (props: FileTreeProps) => {
     </div>
   );
 };
-

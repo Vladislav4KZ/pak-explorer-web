@@ -214,6 +214,11 @@ export async function createZip(entries: PakFileEntry[], compressionLevel: numbe
 export function buildFileTree(entries: PakFileEntry[]): FileTree {
   const tree: FileTree = {};
 
+  if (!entries || typeof entries[Symbol.iterator] !== 'function') {
+    console.error('buildFileTree received non-iterable entries:', entries);
+    return tree; // Return an empty tree if entries is not iterable
+  }
+
   const sortedEntries = [...entries].sort((a, b) => a.path.localeCompare(b.path));
 
   for (const entry of sortedEntries) {
@@ -265,3 +270,16 @@ export function buildFileTree(entries: PakFileEntry[]): FileTree {
 
   return tree;
 }
+
+/**
+ * Calculates the SHA-256 hash of an ArrayBuffer.
+ * @param buffer The ArrayBuffer to hash.
+ * @returns A promise that resolves to a hex string representation of the hash.
+ */
+export async function calculateHash(buffer: ArrayBuffer): Promise<string> {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+    

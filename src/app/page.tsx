@@ -2,14 +2,13 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Box, UploadCloud, PlusCircle, FolderOpen, Menu, Loader2, MoreVertical, FileArchive } from 'lucide-react';
+import { Box, UploadCloud, PlusCircle, FolderOpen, Menu, Loader2, MoreVertical, FileArchive, FolderPlus, FolderSymlink } from 'lucide-react';
 import { FileDropzone } from '@/components/pak/file-dropzone';
 import { PreviewPane } from '@/components/pak/preview-pane';
-import { AddFileDialog } from '@/components/pak/add-file-dialog';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { parsePak, createPak, buildFileTree as buildFileTreeUtil, parseZip, createZip } from '@/lib/pak-parser';
-import type { PakFileEntry, FileTree as FileTreeType, ArchiveType, ClipboardItem } from '@/types';
+import type { PakFileEntry, FileTree as FileTreeType, ArchiveType, ClipboardItem, ConflictFile } from '@/types';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,6 +27,7 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 import { FileListPane } from '@/components/pak/file-list-pane';
 import { MobileSidebar } from '@/components/pak/mobile-sidebar';
+import { ReplaceConfirmationDialog } from '@/components/pak/replace-confirmation-dialog';
 
 type AppState = 'empty' | 'loaded';
 
@@ -39,6 +39,13 @@ type PendingAction = {
     type: 'new_archive';
     archiveType: ArchiveType;
 } | null;
+
+type ReplaceAllStrategy = 'replace' | 'skip' | null;
+
+const isArchiveFile = (fileName: string): boolean => {
+    return /\.(pak|pk3|zip)$/i.test(fileName);
+}
+
 
 async function* getFilesFromEntry(entry: FileSystemEntry): AsyncGenerator<{file: File, path: string}> {
   if (entry.isFile) {
@@ -84,11 +91,16 @@ export default function Home() {
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [isLoadingFile, setIsLoadingFile] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [conflictFiles, setConflictFiles] = useState<ConflictFile[]>([]);
+  const [replaceAllStrategy, setReplaceAllStrategy] = useState<ReplaceAllStrategy>(null);
+  const [pendingFilesToAdd, setPendingFilesToAdd] = useState<PakFileEntry[]>([]);
 
 
   const isMobile = useIsMobile();
   const { toast } = useToast();
   const openFileInputRef = useRef<HTMLInputElement>(null);
+  const addFileInputRef = useRef<HTMLInputElement>(null);
+  const addFolderInputRef = useRef<HTMLInputElement>(null);
 
 
   useEffect(() => {
@@ -99,12 +111,12 @@ export default function Home() {
     const tree = buildFileTreeUtil(entries);
     setFileTree(tree);
   }, []);
-  
-  const setEntries = useCallback((entries: PakFileEntry[], fromLoad: boolean = false) => {
-    setPakEntries(entries);
-    buildFileTree(entries);
+
+  const updateEntries = useCallback((newEntries: PakFileEntry[], fromLoad: boolean = false) => {
+    setPakEntries(newEntries);
+    buildFileTree(newEntries);
     if (!fromLoad) {
-      setIsDirty(true);
+        setIsDirty(true);
     }
   }, [buildFileTree]);
   
@@ -113,20 +125,23 @@ export default function Home() {
       setIsDirty(true);
   }
   
-  const resetStateForNewArchive = useCallback((type: ArchiveType = 'pk3') => {
-    setArchiveType(type);
-    const newName = type === 'pak' ? 'new.pak' : 'new.pk3';
-    setPakName(newName);
-    setEntries([], true);
-    setFileTree(null);
-    setSelectedFile(null);
-    setAppState('loaded');
-    setIsDirty(false);
-    toast({
-      title: `New ${type.toUpperCase()} archive created`,
-      description: 'You can now add files to the new archive.',
+  const resetStateForNewArchive = useCallback(async (type: ArchiveType = 'pk3'): Promise<void> => {
+    return new Promise(resolve => {
+        setArchiveType(type);
+        const newName = type === 'pak' ? 'new.pak' : 'new.pk3';
+        setPakName(newName);
+        const initialEntries: PakFileEntry[] = [];
+        updateEntries(initialEntries, true);
+        setSelectedFile(null);
+        setAppState('loaded');
+        setIsDirty(false);
+        toast({
+          title: `New archive created`,
+          description: 'You can now add files to the new archive.',
+        });
+        resolve();
     });
-  }, [setEntries, toast]);
+  }, [updateEntries, toast]);
 
   const handleFileLoad = useCallback(
     async (file: File) => {
@@ -153,7 +168,7 @@ export default function Home() {
           });
         }
         
-        setEntries(entries, true);
+        updateEntries(entries, true);
         setSelectedFile(null);
         setAppState('loaded');
         setIsDirty(false);
@@ -170,7 +185,7 @@ export default function Home() {
         setIsLoadingFile(false);
       }
     },
-    [setEntries, toast]
+    [updateEntries, toast]
   );
   
   const handleNewArchive = useCallback((type: ArchiveType = 'pk3') => {
@@ -227,11 +242,47 @@ export default function Home() {
         setIsSaving(false);
     }
   }, [pakEntries, pakName, toast]);
+  
+    const addBatchEntries = useCallback((entriesToAdd: PakFileEntry[]) => {
+        if (!entriesToAdd || entriesToAdd.length === 0) return;
+        setPendingFilesToAdd(entriesToAdd);
+    }, []);
+
+    useEffect(() => {
+        if (pendingFilesToAdd.length === 0) return;
+
+        const existingPaths = new Map(pakEntries.map(e => [e.path, e]));
+        const newFiles: PakFileEntry[] = [];
+        const conflicts: ConflictFile[] = [];
+
+        for (const newEntry of pendingFilesToAdd) {
+            if (existingPaths.has(newEntry.path)) {
+                conflicts.push({ newFile: newEntry, existingFile: existingPaths.get(newEntry.path)! });
+            } else {
+                newFiles.push(newEntry);
+            }
+        }
+        
+        if (conflicts.length > 0) {
+            setReplaceAllStrategy(null);
+            setConflictFiles(prev => [...prev, ...conflicts]);
+        }
+        
+        if (newFiles.length > 0) {
+            updateEntries([...pakEntries, ...newFiles]);
+            toast({
+                title: `${newFiles.length} file(s) added`,
+                description: "New files were added to the archive."
+            });
+        }
+        
+        setPendingFilesToAdd([]); // Clear pending files
+    }, [pendingFilesToAdd, pakEntries, updateEntries, toast]);
+
 
   const handleAddNewFile = useCallback(
     (name: string, data: ArrayBuffer) => {
       const normalizedName = name.replace(/\\/g, '/');
-      const existingIndex = pakEntries.findIndex((e) => e.path === normalizedName);
       const newEntry: PakFileEntry = {
         name: normalizedName.split('/').pop() || '',
         path: normalizedName,
@@ -240,79 +291,114 @@ export default function Home() {
         offset: 0, // Offset will be recalculated on save
       };
 
-      let updatedEntries;
-      if (existingIndex > -1) {
-        updatedEntries = [...pakEntries];
-        updatedEntries[existingIndex] = newEntry;
-        toast({
-          title: 'File replaced',
-          description: `Replaced "${normalizedName}" in the archive.`,
-        });
-      } else {
-        updatedEntries = [...pakEntries, newEntry];
-        toast({
-          title: 'File added',
-          description: `Added "${normalizedName}" to the archive.`,
-        });
-      }
-      setEntries(updatedEntries);
+     addBatchEntries([newEntry]);
     },
-    [pakEntries, toast, setEntries]
+    [addBatchEntries]
   );
   
-  const handleAddDroppedFile = useCallback(async (file: File, destPath?: string) => {
+  const handleAddDroppedFile = useCallback(async (file: File, destPath?: string): Promise<PakFileEntry | null> => {
+    if (isArchiveFile(file.name)) {
+        toast({
+            variant: 'destructive',
+            title: 'Action blocked',
+            description: 'The archive should not contain other archives.'
+        });
+        return null;
+    }
     const path = destPath ? `${destPath}/${file.name}` : file.name;
     const data = await file.arrayBuffer();
-    handleAddNewFile(path, data);
-  }, [handleAddNewFile]);
+    
+    return {
+        name: path.split('/').pop() || '',
+        path: path.replace(/\\/g, '/'),
+        data,
+        size: data.byteLength,
+        offset: 0
+    };
+  }, [toast]);
 
-  const handleAddDroppedFolder = useCallback(async (entry: FileSystemEntry, destPath?: string) => {
-      let addedCount = 0;
-      let newEntries = [...pakEntries];
+  const handleAddDroppedFolder = useCallback(async (entry: FileSystemEntry, destPath?: string): Promise<PakFileEntry[]> => {
+      const newEntries: PakFileEntry[] = [];
+      
+      // Pre-scan for archives
+      for await (const {file} of getFilesFromEntry(entry)) {
+          if (isArchiveFile(file.name)) {
+              toast({
+                  variant: 'destructive',
+                  title: 'Action blocked',
+                  description: 'The archive should not contain other archives.'
+              });
+              return [];
+          }
+      }
+
       for await (const {file, path: relativePath} of getFilesFromEntry(entry)) {
           const newPath = destPath ? `${destPath}/${relativePath}` : relativePath;
           const data = await file.arrayBuffer();
-          const existingIndex = newEntries.findIndex((e) => e.path === newPath);
-          const newEntry: PakFileEntry = {
+          newEntries.push({
               name: newPath.split('/').pop() || '',
-              path: newPath,
+              path: newPath.replace(/\\/g, '/'),
               data,
               size: data.byteLength,
               offset: 0,
-          };
-          if (existingIndex > -1) {
-              newEntries[existingIndex] = newEntry;
-          } else {
-              newEntries.push(newEntry);
-          }
-          addedCount++;
+          });
       }
-      setEntries(newEntries);
-      toast({
-          title: 'Folder Added',
-          description: `Added ${addedCount} files from "${entry.name}".`
-      });
-  }, [pakEntries, setEntries, toast]);
+      return newEntries;
+  }, [toast]);
   
-  const handleItemDropOnEmpty = useCallback(async (item: DataTransferItem) => {
-    const entry = item.webkitGetAsEntry();
-    if (!entry) return;
+  const handleItemDropOnEmpty = useCallback(async (items: DataTransferItemList) => {
+    const entries = Array.from(items).map(item => item.webkitGetAsEntry()).filter(Boolean) as FileSystemEntry[];
 
-    if (appState === 'empty') {
-        resetStateForNewArchive('pk3'); // Create a default archive first
-    }
-    
-    // We need to wait for state to update, so we use a timeout
-    setTimeout(async () => {
-        if (entry.isFile) {
-            const file = await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej));
-            await handleAddDroppedFile(file, '');
-        } else if (entry.isDirectory) {
-            await handleAddDroppedFolder(entry, '');
+    for (const entry of entries) {
+      if (entry.isFile) {
+        const file = await new Promise<File>(res => (entry as FileSystemFileEntry).file(res));
+        if (isArchiveFile(file.name)) {
+          toast({ variant: 'destructive', title: 'Action blocked', description: 'The archive should not contain other archives.' });
+          return;
         }
-    }, 0);
+      } else if (entry.isDirectory) {
+        for await (const { file } of getFilesFromEntry(entry)) {
+          if (isArchiveFile(file.name)) {
+            toast({ variant: 'destructive', title: 'Action blocked', description: 'The archive should not contain other archives.' });
+            return;
+          }
+        }
+      }
+    }
 
-}, [appState, resetStateForNewArchive, handleAddDroppedFile, handleAddDroppedFolder]);
+    await resetStateForNewArchive('pk3');
+    
+    let allNewEntries: PakFileEntry[] = [];
+    let addedFileCount = 0;
+    let addedFolderCount = 0;
+
+    const entryPromises = entries.map(entry => {
+        if (entry.isFile) {
+            return (async () => {
+                const file = await new Promise<File>(res => (entry as FileSystemFileEntry).file(res));
+                const data = await file.arrayBuffer();
+                addedFileCount++;
+                return { name: file.name, path: file.name, data, size: data.byteLength, offset: 0 };
+            })();
+        } else if (entry.isDirectory) {
+            addedFolderCount++;
+            return handleAddDroppedFolder(entry, '');
+        }
+        return Promise.resolve(null);
+    });
+    
+    const results = await Promise.all(entryPromises);
+    allNewEntries = results.flat().filter((e): e is PakFileEntry => e !== null);
+
+    addBatchEntries(allNewEntries);
+
+    if (addedFileCount > 0 || addedFolderCount > 0) {
+        toast({
+            title: 'Items Added',
+            description: `Added ${addedFileCount} file(s) and ${addedFolderCount > 0 ? ` content from ${addedFolderCount} folder(s)` : ''} to new archive.`
+        });
+    }
+  }, [resetStateForNewArchive, addBatchEntries, toast, handleAddDroppedFolder]);
 
 
   const handleAddNewFolder = useCallback((folderPath: string) => {
@@ -340,8 +426,7 @@ export default function Home() {
           offset: 0,
       };
 
-      const updatedEntries = [...pakEntries, placeholderEntry];
-      setEntries(updatedEntries);
+      updateEntries([...pakEntries, placeholderEntry]);
 
       toast({
           title: 'Folder added',
@@ -349,7 +434,7 @@ export default function Home() {
       });
 
       setIsAddingFolder(false);
-  }, [pakEntries, toast, setEntries]);
+  }, [pakEntries, toast, updateEntries]);
 
   const handleExtractFile = (file: PakFileEntry) => {
     const blob = new Blob([file.data], { type: 'application/octet-stream' });
@@ -395,12 +480,12 @@ export default function Home() {
             return entry;
         });
     }
-    setEntries(updatedEntries);
+    updateEntries(updatedEntries);
     if (selectedFile?.path.startsWith(sourcePath)) {
         setSelectedFile(null);
     }
     toast({ title: 'Moved', description: `Moved "${sourceName}" to "${destPath || 'root'}".` });
-  }, [pakEntries, setEntries, selectedFile, toast]);
+  }, [pakEntries, updateEntries, selectedFile, toast]);
 
   const handleRenameConfirm = useCallback((oldPath: string, newPath: string) => {
     if (oldPath === newPath) {
@@ -429,7 +514,7 @@ export default function Home() {
         });
     }
 
-    setEntries(updatedEntries);
+    updateEntries(updatedEntries);
 
     if (selectedFile && selectedFile.path.startsWith(oldPath)) {
         const newSelectedPath = selectedFile.path.replace(oldPath, newPath);
@@ -439,7 +524,7 @@ export default function Home() {
     
     setRenamingPath(null);
     toast({ title: "Renamed", description: `"${oldPath}" renamed to "${newPath}"` });
-  }, [pakEntries, setEntries, selectedFile, toast]);
+  }, [pakEntries, updateEntries, selectedFile, toast]);
 
   const handleDelete = useCallback(() => {
     if (!deletingPath) return;
@@ -451,7 +536,7 @@ export default function Home() {
       updatedEntries = pakEntries.filter(entry => !entry.path.startsWith(`${deletingPath}/`) && entry.path !== deletingPath);
     }
     
-    setEntries(updatedEntries);
+    updateEntries(updatedEntries);
 
     if (selectedFile && selectedFile.path.startsWith(deletingPath)) {
       setSelectedFile(null);
@@ -460,7 +545,7 @@ export default function Home() {
     toast({ title: "Deleted", description: `Deleted "${deletingPath}"` });
     setDeletingPath(null);
     setDeletingType(null);
-  }, [deletingPath, deletingType, pakEntries, setEntries, selectedFile, toast]);
+  }, [deletingPath, deletingType, pakEntries, updateEntries, selectedFile, toast]);
 
   const confirmDelete = () => {
     handleDelete();
@@ -524,21 +609,83 @@ export default function Home() {
     }
     updatedEntries = [...updatedEntries, ...entriesToAdd];
     
-    setEntries(updatedEntries);
+    updateEntries(updatedEntries);
     toast({ title: 'Pasted', description: `Pasted "${sourceName}" into "${destPath}".` });
     if(type === 'cut') setClipboard(null);
-  }, [clipboard, pakEntries, toast, setEntries]);
+  }, [clipboard, pakEntries, toast, updateEntries]);
 
-
-  if (!isClient) {
-    return null;
-  }
-  
   const handleAddFileInput = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files && event.target.files[0]) {
-      const file = event.target.files[0];
-      const data = await file.arrayBuffer();
-      handleAddNewFile(file.name, data);
+    if (event.target.files && event.target.files.length > 0) {
+      const files = Array.from(event.target.files);
+      let newEntries: PakFileEntry[] = [];
+
+      // Check for archives before adding
+      for (const file of files) {
+          if (isArchiveFile(file.name)) {
+              toast({
+                  variant: 'destructive',
+                  title: 'Action blocked',
+                  description: 'The archive should not contain other archives.'
+              });
+              event.target.value = '';
+              return;
+          }
+      }
+      
+      const entryPromises = files.map(async (file) => {
+          const path = file.name;
+          const data = await file.arrayBuffer();
+          return {
+              name: path.split('/').pop() || '',
+              path: path,
+              data,
+              size: data.byteLength,
+              offset: 0,
+          };
+      });
+      
+      newEntries = await Promise.all(entryPromises);
+      addBatchEntries(newEntries);
+      // Reset the input value to allow selecting the same file(s) again
+      event.target.value = '';
+    }
+  };
+
+  const handleAddFolderInput = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files.length > 0) {
+        const files = Array.from(event.target.files);
+        let newEntries: PakFileEntry[] = [];
+
+        // Check for archives before adding
+        for (const file of files) {
+            const path = (file as any).webkitRelativePath || file.name;
+            if (isArchiveFile(path)) {
+                toast({
+                    variant: 'destructive',
+                    title: 'Action blocked',
+                    description: 'The archive should not contain other archives.'
+                });
+                event.target.value = '';
+                return;
+            }
+        }
+        
+        const entryPromises = files.map(async (file) => {
+            const path = (file as any).webkitRelativePath || file.name;
+            const data = await file.arrayBuffer();
+            return {
+                name: path.split('/').pop() || '',
+                path: path,
+                data,
+                size: data.byteLength,
+                offset: 0,
+            };
+        });
+
+        newEntries = await Promise.all(entryPromises);
+        addBatchEntries(newEntries);
+        // Reset the input value to allow selecting the same folder again
+        event.target.value = '';
     }
   };
   
@@ -550,6 +697,7 @@ export default function Home() {
         } else {
           handleFileLoad(file);
         }
+        event.target.value = '';
     }
   };
 
@@ -567,29 +715,92 @@ export default function Home() {
     if (pendingAction?.type === 'open_file') {
         handleFileLoad(pendingAction.file);
     } else if (pendingAction?.type === 'new_archive') {
-        resetStateForNewArchive(pendingAction.archiveType);
+        await resetStateForNewArchive(pendingAction.archiveType);
     }
     setPendingAction(null); // Clear pending action
   };
   
   const handleFileDropOnEmpty = async (file: File) => {
-      const isArchive = ['pak', 'pk3', 'zip'].includes(file.name.split('.').pop()?.toLowerCase() || '');
-      if (isArchive) {
+      const isDroppingArchive = isArchiveFile(file.name);
+      if (isDroppingArchive) {
         if (isDirty) {
           setPendingAction({ type: 'open_file', file });
         } else {
           handleFileLoad(file);
         }
       } else {
-        if(appState === 'empty') {
-            resetStateForNewArchive('pk3'); // Create a default archive first
-        }
-         // We need to wait for state to update, so we use a timeout
-        setTimeout(async () => {
-            const data = await file.arrayBuffer();
-            handleAddNewFile(file.name, data);
-        }, 0);
+        await resetStateForNewArchive('pk3');
+        const data = await file.arrayBuffer();
+        handleAddNewFile(file.name, data);
       }
+    };
+
+    const processConflictQueue = useCallback(() => {
+        if (conflictFiles.length === 0) {
+            setReplaceAllStrategy(null); // Clear strategy when queue is done
+            return;
+        }
+
+        const currentConflict = conflictFiles[0];
+        let filesToReplace: PakFileEntry[] = [];
+        let filesToKeep: PakFileEntry[] = [...pakEntries];
+        let remainingConflicts = [...conflictFiles];
+
+        if (replaceAllStrategy) {
+            if (replaceAllStrategy === 'replace') {
+                filesToReplace = remainingConflicts.map(c => c.newFile);
+            }
+            // If 'skip', we just clear the conflicts
+            remainingConflicts = [];
+        } else {
+            // Handled by the dialog interaction, not here
+            return;
+        }
+        
+        if (filesToReplace.length > 0) {
+            const pathsToReplace = new Set(filesToReplace.map(f => f.path));
+            const newPakEntries = [
+                ...filesToKeep.filter(f => !pathsToReplace.has(f.path)),
+                ...filesToReplace
+            ];
+            updateEntries(newPakEntries);
+            toast({ title: 'Files Replaced', description: `${filesToReplace.length} file(s) have been updated.` });
+        }
+
+        setConflictFiles(remainingConflicts);
+
+    }, [conflictFiles, replaceAllStrategy, pakEntries, updateEntries, toast]);
+
+    useEffect(() => {
+        // Automatically process the queue if a "replace all" or "skip all" strategy is set
+        if (replaceAllStrategy) {
+            processConflictQueue();
+        }
+    }, [replaceAllStrategy, processConflictQueue]);
+
+    const handleConflictResolution = (action: 'replace' | 'skip' | 'replaceAll' | 'skipAll') => {
+        if (action === 'replaceAll') {
+            setReplaceAllStrategy('replace');
+            return; // Effect will handle processing
+        }
+        if (action === 'skipAll') {
+            setReplaceAllStrategy('skip');
+            return; // Effect will handle processing
+        }
+
+        const [currentConflict, ...remaining] = conflictFiles;
+        
+        if (action === 'replace') {
+            const newPakEntries = [
+                ...pakEntries.filter(f => f.path !== currentConflict.newFile.path),
+                currentConflict.newFile
+            ];
+            updateEntries(newPakEntries);
+            toast({ title: 'File Replaced', description: `"${currentConflict.newFile.path}" has been updated.` });
+        }
+        
+        // For both 'replace' and 'skip', move to the next conflict
+        setConflictFiles(remaining);
     };
   
   const fileListPaneProps = {
@@ -601,6 +812,7 @@ export default function Home() {
     renamingPath,
     clipboard,
     isRenamingPak,
+    onSelectFile: setSelectedFile,
     onRenameStart: setRenamingPath,
     onRenameConfirm: handleRenameConfirm,
     onDeleteStart: (path: string, type: 'file' | 'folder') => { setDeletingPath(path); setDeletingType(type); },
@@ -609,20 +821,32 @@ export default function Home() {
     onPaste: handlePaste,
     onFileDrop: handleAddDroppedFile,
     onFolderDrop: handleAddDroppedFolder,
-    onAddFile: () => document.getElementById('add-file-input')?.click(),
-    onAddFolder: () => setIsAddingFolder(true),
-    onSelectFile: (file: PakFileEntry) => {
-        setSelectedFile(file);
-        if (isMobile) setIsMobileMenuOpen(false);
-    },
+    onAddFile: () => addFileInputRef.current?.click(),
+    onAddFolder: () => addFolderInputRef.current?.click(),
+    onNewFolder: () => setIsAddingFolder(true),
+    addBatchEntries,
     setIsRenamingPak,
     setPakName: handlePakNameChange,
     toast,
   };
 
+  if (!isClient) {
+    return null;
+  }
+  
   return (
     <div className="flex h-screen w-full flex-col bg-background font-sans">
-      <input id="add-file-input" type="file" className="hidden" onChange={handleAddFileInput} />
+      <input ref={addFileInputRef} type="file" className="hidden" onChange={handleAddFileInput} multiple />
+      <input 
+        ref={addFolderInputRef} 
+        type="file" 
+        className="hidden" 
+        onChange={handleAddFolderInput} 
+        // @ts-ignore
+        webkitdirectory="true" 
+        directory="true" 
+        multiple
+      />
       <input ref={openFileInputRef} type="file" className="hidden" onChange={handleOpenFileInput} accept=".pak,.pk3,.zip" />
 
       {(isLoadingFile || isSaving) && (
@@ -648,6 +872,13 @@ export default function Home() {
             onConfirm={(options) => handleSave(saveType, options)}
             fileName={pakName}
         />
+      )}
+       {conflictFiles.length > 0 && !replaceAllStrategy && (
+          <ReplaceConfirmationDialog 
+            conflict={conflictFiles[0]}
+            onResolve={handleConflictResolution}
+            remainingCount={conflictFiles.length - 1}
+          />
       )}
       <AlertDialog open={!!deletingPath} onOpenChange={() => { setDeletingPath(null); setDeletingType(null); }}>
         <AlertDialogContent>
@@ -749,13 +980,23 @@ export default function Home() {
       <main className="flex-1 overflow-hidden">
         {appState === 'empty' ? (
           <div className="flex h-full items-center justify-center p-8">
-            <div className="flex flex-col items-center gap-4">
+            <div className="flex flex-col items-center gap-4 text-center">
               <FileDropzone 
                 onFileLoad={handleFileLoad} 
                 onItemDrop={handleItemDropOnEmpty}
                 icon={<UploadCloud size={64} />} 
                 accept=".pak,.pk3,.zip"
+                message={isMobile ? (
+                  <p className="font-semibold text-foreground">Tap to open an archive</p>
+                ) : (
+                  <p>
+                    <span className="font-semibold text-foreground">Drag &amp; drop an archive here to open</span>
+                    <br/>
+                    <span className="text-sm text-muted-foreground">or drop files/folders to create a new one</span>
+                  </p>
+                )}
               />
+              
               <Button size="lg" onClick={() => handleNewArchive()}>
                 <PlusCircle className="mr-2 h-5 w-5" />
                 Or Create a New Empty Archive
@@ -783,9 +1024,5 @@ export default function Home() {
     </div>
   );
 }
-
-
-
-    
 
     

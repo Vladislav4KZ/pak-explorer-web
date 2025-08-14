@@ -5,11 +5,13 @@ import { FileTree } from '@/components/pak/file-tree';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
-import { Check, ClipboardPaste, FolderPlus, Pencil, PlusCircle, X } from 'lucide-react';
+import { Check, ClipboardPaste, FolderPlus, Pencil, PlusCircle, X, FolderSymlink, ChevronDown, Plus } from 'lucide-react';
 import type { PakFileEntry, FileTree as FileTreeType, ClipboardItem } from '@/types';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu';
 
 interface FileListPaneProps {
   pakName: string;
@@ -28,10 +30,12 @@ interface FileListPaneProps {
   onMove: (sourcePath: string, destPath: string) => void;
   onClipboardAction: (type: 'copy' | 'cut', itemType: 'file' | 'folder', path: string) => void;
   onPaste: (destPath: string) => void;
-  onFileDrop: (file: File, destPath?: string) => void;
-  onFolderDrop: (entry: FileSystemEntry, destPath?: string) => void;
+  onFileDrop: (file: File, destPath?: string) => Promise<PakFileEntry | null>;
+  onFolderDrop: (entry: FileSystemEntry, destPath?: string) => Promise<PakFileEntry[]>;
   onAddFile: () => void;
   onAddFolder: () => void;
+  onNewFolder: () => void;
+  addBatchEntries: (entries: PakFileEntry[]) => void;
   setIsRenamingPak: (isRenaming: boolean) => void;
   setPakName: (name: string) => void;
   toast: (options: { title: string, description: string, variant?: 'destructive' }) => void;
@@ -57,13 +61,14 @@ export function FileListPane({
   onFolderDrop,
   onAddFile,
   onAddFolder,
+  onNewFolder,
+  addBatchEntries,
   setIsRenamingPak,
   setPakName,
   toast,
 }: FileListPaneProps) {
     
   const getPakBaseName = (name: string) => name.replace(/\.(pak|pk3|zip)$/i, '');
-  const getPakExtension = (name: string) => name.split('.').pop() || 'pak';
     
   const [tempPakName, setTempPakName] = useState(getPakBaseName(pakName));
   const [isDropTarget, setIsDropTarget] = useState(false);
@@ -81,10 +86,8 @@ export function FileListPane({
   const handleRenameSave = () => {
     const trimmedName = tempPakName.trim();
     if (trimmedName && trimmedName !== getPakBaseName(pakName)) {
-      const extension = getPakExtension(pakName);
-      const newFullName = `${trimmedName}.${extension}`;
-      setPakName(newFullName);
-      toast({ title: "Archive Renamed", description: `Renamed to "${newFullName}"` });
+      setPakName(trimmedName);
+      toast({ title: "Archive Renamed", description: `Renamed to "${trimmedName}"` });
     }
     setIsRenamingPak(false);
   };
@@ -101,19 +104,17 @@ export function FileListPane({
     setIsDropTarget(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDropTarget(false);
     
-    // Prevent drop on specific items by letting them handle it
     if ((e.target as HTMLElement).closest('[data-dnd-target="item"]')) {
       return;
     }
 
     const internalDragData = e.dataTransfer.getData('application/pak-explorer-item');
     if (internalDragData) {
-      // It's a move, and we are in the root
       try {
         const data = JSON.parse(internalDragData);
         if (data.path) {
@@ -124,11 +125,24 @@ export function FileListPane({
     }
 
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-      const entry = e.dataTransfer.items[0].webkitGetAsEntry();
-      if (entry?.isFile) {
-         (entry as FileSystemFileEntry).file(file => onFileDrop(file, ''));
-      } else if (entry?.isDirectory) {
-        onFolderDrop(entry, '');
+      const items = Array.from(e.dataTransfer.items);
+      const entryPromises = items.map(item => {
+          const entry = item.webkitGetAsEntry();
+          if (!entry) return Promise.resolve(null);
+          if (entry.isFile) {
+              return new Promise<File>(res => (entry as FileSystemFileEntry).file(res))
+                  .then(file => onFileDrop(file, ''));
+          } else if (entry.isDirectory) {
+              return onFolderDrop(entry, '');
+          }
+          return Promise.resolve(null);
+      });
+
+      const results = await Promise.all(entryPromises);
+      const newEntries = results.flat().filter((e): e is PakFileEntry => e !== null);
+      
+      if (newEntries.length > 0) {
+        addBatchEntries(newEntries);
       }
     }
   };
@@ -181,20 +195,52 @@ export function FileListPane({
           {pakEntries.filter((e) => e.name !== '.placeholder').length} items
         </p>
       </div>
-      <div className="flex shrink-0 gap-2 p-2">
-        <Button onClick={onAddFile} className="flex-1">
-          <PlusCircle className="mr-2 h-4 w-4" /> Add File
-        </Button>
-        <Button onClick={onAddFolder} className="flex-1" variant="outline">
-          <FolderPlus className="mr-2 h-4 w-4" /> New Folder
-        </Button>
-        {clipboard && (
+      <div className="shrink-0 space-y-2 p-2 border-b">
+        <TooltipProvider>
+          <div className="flex gap-2">
+              <Tooltip>
+                  <TooltipTrigger asChild>
+                      <Button onClick={onAddFile} className="flex-1">
+                          <PlusCircle className="mr-2 h-4 w-4" /> Add Files
+                      </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                      <p>Add files to the archive</p>
+                  </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                  <TooltipTrigger asChild>
+                      <Button onClick={onAddFolder} className="flex-1" variant="outline">
+                          <FolderSymlink className="mr-2 h-4 w-4" /> Add Folder
+                      </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                      <p>Add contents of a folder</p>
+                  </TooltipContent>
+              </Tooltip>
+          </div>
+          <div className="flex">
+              <Tooltip>
+                  <TooltipTrigger asChild>
+                          <Button onClick={onNewFolder} className="flex-1" variant="outline">
+                          <FolderPlus className="mr-2 h-4 w-4" /> New Folder
+                      </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                      <p>Create a new empty folder</p>
+                  </TooltipContent>
+              </Tooltip>
+          </div>
+        </TooltipProvider>
+      </div>
+       <div className='p-2 shrink-0'>
+         {clipboard && (
           <Button
             onClick={() => onPaste('')}
-            className="flex-1"
+            className="w-full"
             variant="secondary"
           >
-            <ClipboardPaste className="mr-2 h-4 w-4" /> Paste
+            <ClipboardPaste className="mr-2 h-4 w-4" /> Paste to root
           </Button>
         )}
       </div>
@@ -204,7 +250,7 @@ export function FileListPane({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         >
-        <div className={cn("px-2 pb-4 h-full", isDropTarget && 'bg-accent/50 rounded-md')}>
+        <div className={cn("p-2 pb-4 h-full", isDropTarget && 'bg-accent/20 rounded-md')}>
           {fileTree && (
             <FileTree
               tree={fileTree}
@@ -220,11 +266,12 @@ export function FileListPane({
               onPaste={onPaste}
               onFileDrop={onFileDrop}
               onFolderDrop={onFolderDrop}
+              addBatchEntries={addBatchEntries}
             />
           )}
           {pakEntries.length === 0 && (
             <div className="p-4 text-center italic text-muted-foreground h-full flex items-center justify-center">
-              {isMobile ? "Tap 'Add File' to start." : "This archive is empty. Drag files here to add them."}
+              {isMobile ? "Tap 'Add Files' or 'Add Folder' to start." : "This archive is empty. Drag files here to add them."}
             </div>
           )}
         </div>
