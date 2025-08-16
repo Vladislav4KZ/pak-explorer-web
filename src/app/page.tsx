@@ -707,17 +707,19 @@ export default function Home() {
 
   const handleUnsavedDialogAction = async (action: 'save-pak' | 'save-pk3' | 'dont-save') => {
     if (action === 'save-pak') {
+        setPendingAction(null); // Close dialog
         await handleSave('pak');
     } else if (action === 'save-pk3') {
-        await handleSave('pk3');
+        setPendingAction(null); // Close dialog
+        handleSaveClick('pk3');
+    } else if (action === 'dont-save') {
+        if (pendingAction?.type === 'open_file') {
+            handleFileLoad(pendingAction.file);
+        } else if (pendingAction?.type === 'new_archive') {
+            await resetStateForNewArchive(pendingAction.archiveType);
+        }
+        setPendingAction(null); // Clear pending action
     }
-    
-    if (pendingAction?.type === 'open_file') {
-        handleFileLoad(pendingAction.file);
-    } else if (pendingAction?.type === 'new_archive') {
-        await resetStateForNewArchive(pendingAction.archiveType);
-    }
-    setPendingAction(null); // Clear pending action
   };
   
   const handleFileDropOnEmpty = async (file: File) => {
@@ -802,6 +804,19 @@ export default function Home() {
         // For both 'replace' and 'skip', move to the next conflict
         setConflictFiles(remaining);
     };
+    
+    // This effect handles continuing the pending action after saving from the dialog.
+    useEffect(() => {
+        if (!isDirty && pendingAction && !isSaveDialogOpen) {
+            if (pendingAction.type === 'open_file') {
+                handleFileLoad(pendingAction.file);
+            } else if (pendingAction.type === 'new_archive') {
+                resetStateForNewArchive(pendingAction.archiveType);
+            }
+            setPendingAction(null);
+        }
+    }, [isDirty, pendingAction, handleFileLoad, resetStateForNewArchive, isSaveDialogOpen]);
+
   
   const fileListPaneProps = {
     pakName,

@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { ChevronRight, File as FileIcon, Folder, ImageIcon, FileText, Pencil, Trash2, MoreVertical, Music, Copy, Scissors, ClipboardPaste } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
@@ -10,8 +10,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuTrigger,
   DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
@@ -21,7 +21,7 @@ interface FileTreeProps {
   onSelectFile: (file: PakFileEntry) => void;
   selectedPath?: string | null;
   renamingPath: string | null;
-  onRenameStart: (path: string) => void;
+  onRenameStart: (path: string | null) => void;
   onRenameConfirm: (oldPath: string, newPath: string) => void;
   onDeleteStart: (path: string, type: 'file' | 'folder') => void;
   onMove: (sourcePath: string, destPath: string) => void;
@@ -50,29 +50,49 @@ const getIcon = (name: string) => {
   return <FileIcon className="h-4 w-4 text-muted-foreground" />;
 };
 
-const RenameInput = ({ node, onRenameConfirm, onCancel }: { node: FileTreeNode; onRenameConfirm: (oldPath: string, newPath: string) => void; onCancel: () => void; }) => {
-    const [newName, setNewName] = useState(node.name);
+const activeRenameSubmitRef: React.MutableRefObject<(() => void) | null> = { current: null };
+
+const RenameInput = ({ name, onRenameConfirm, onCancel, path }: { name: string; path: string; onRenameConfirm: (oldPath: string, newPath: string) => void; onCancel: () => void; }) => {
+    const [newName, setNewName] = useState(name);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    useEffect(() => {
-        inputRef.current?.focus();
-        inputRef.current?.select();
-    }, []);
-
-    const handleSubmit = () => {
-        const pathParts = node.path.split('/');
+    const handleSubmit = useCallback(() => {
+        const pathParts = path.split('/');
         const oldName = pathParts.pop();
-        if (newName && newName !== oldName) {
-            pathParts.push(newName);
-            onRenameConfirm(node.path, pathParts.join('/'));
+        const trimmedNewName = newName.trim();
+        if (trimmedNewName && trimmedNewName !== oldName) {
+            pathParts.push(trimmedNewName);
+            onRenameConfirm(path, pathParts.join('/'));
         } else {
             onCancel();
         }
-    };
-    
-    const handleBlur = () => {
-        handleSubmit();
-    };
+    }, [newName, path, onRenameConfirm, onCancel]);
+
+    useEffect(() => {
+        activeRenameSubmitRef.current = handleSubmit;
+
+        const animationFrame = requestAnimationFrame(() => {
+            inputRef.current?.focus();
+            inputRef.current?.select();
+        });
+        
+        const handleMouseDown = (event: MouseEvent) => {
+            if (inputRef.current && !inputRef.current.contains(event.target as Node)) {
+                handleSubmit();
+            }
+        };
+
+        document.addEventListener('mousedown', handleMouseDown);
+
+        return () => {
+            cancelAnimationFrame(animationFrame);
+            document.removeEventListener('mousedown', handleMouseDown);
+            if (activeRenameSubmitRef.current === handleSubmit) {
+                activeRenameSubmitRef.current = null;
+            }
+        };
+    }, [path, name, handleSubmit]);
+
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter') {
@@ -87,9 +107,8 @@ const RenameInput = ({ node, onRenameConfirm, onCancel }: { node: FileTreeNode; 
             ref={inputRef}
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            onBlur={handleBlur}
             onKeyDown={handleKeyDown}
-            className="h-7 ml-6"
+            className="h-7 ml-1 flex-1"
         />
     );
 };
@@ -115,7 +134,7 @@ const FileTreeItem = ({
   onSelectFile: (file: PakFileEntry) => void;
   selectedPath?: string | null;
   renamingPath: string | null;
-  onRenameStart: (path: string) => void;
+  onRenameStart: (path: string | null) => void;
   onRenameConfirm: (oldPath: string, newPath: string) => void;
   onDeleteStart: (path: string, type: 'file' | 'folder') => void;
   onMove: (sourcePath: string, destPath: string) => void;
@@ -130,6 +149,8 @@ const FileTreeItem = ({
   const [isDropTarget, setIsDropTarget] = useState(false);
   const itemRef = useRef<HTMLDivElement>(null);
   const isTouchDevice = typeof window !== 'undefined' && 'ontouchstart' in window;
+  const isRenaming = renamingPath === node.path;
+  
 
   const handleDragStart = (e: React.DragEvent) => {
       e.dataTransfer.setData('application/pak-explorer-item', JSON.stringify({ path: node.path, type: node.type }));
@@ -199,46 +220,89 @@ const FileTreeItem = ({
   };
   
   const dragAndDropProps = isTouchDevice ? {} : {
-    draggable: true,
+    draggable: !isRenaming,
     onDragStart: handleDragStart,
     onDragOver: handleDragOver,
     onDragLeave: handleDragLeave,
     onDrop: handleDrop,
   };
 
-  if (renamingPath === node.path) {
-    return <RenameInput node={node} onRenameConfirm={onRenameConfirm} onCancel={() => onRenameStart('')} />;
-  }
-  
   if (node.name === '.placeholder') {
       return null;
   }
 
+  const handleItemClick = (e: React.MouseEvent) => {
+    if (isRenaming) {
+        e.stopPropagation();
+        return;
+    }
+    
+    if (node.type === 'file') {
+      onSelectFile(node.file!);
+    }
+  };
+  
   const triggerContent = (
-    <div 
-        data-dnd-target="item"
-        className={cn('flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm',
-        selectedPath === node.path ? 'bg-primary/20' : 'hover:bg-accent',
-        isDropTarget && 'bg-accent ring-1 ring-primary/50'
-    )}>
-        {node.type === 'folder' ? (
-            <ChevronRight className={cn('h-4 w-4 shrink-0 transition-transform duration-200', isOpen && 'rotate-90')} />
-        ) : <span className="w-4" />}
-        
-        {node.type === 'folder' ? <Folder className="h-4 w-4 text-yellow-500" /> : getIcon(node.name)}
-        <span className="truncate flex-1">{node.name}</span>
-    </div>
+      <div
+          onClick={handleItemClick}
+          className={cn('flex flex-1 w-full min-w-0 items-center rounded-md text-left text-sm',
+              selectedPath === node.path && !isRenaming ? 'bg-primary/20' : '',
+              isDropTarget && 'bg-accent ring-1 ring-primary/50'
+          )}
+      >
+        <div className={cn('flex items-center gap-2 flex-1 min-w-0 p-1.5', isRenaming && 'py-0 pl-1.5 pr-1')}>
+          {node.type === 'folder' ? (
+              <ChevronRight className={cn('h-4 w-4 shrink-0 transition-transform duration-200', isOpen && 'rotate-90')} />
+          ) : <span className="w-4 shrink-0" />}
+          
+          <div className='shrink-0'>
+            {node.type === 'folder' ? <Folder className="h-4 w-4 text-yellow-500" /> : getIcon(node.name)}
+          </div>
+
+          {isRenaming ? (
+              <RenameInput name={node.name} path={node.path} onRenameConfirm={onRenameConfirm} onCancel={() => onRenameStart(null)} />
+          ) : (
+              <span className="truncate flex-1">{node.name}</span>
+          )}
+        </div>
+      </div>
   );
+  
+  const handleMenuButtonPointerDown = (e: React.PointerEvent) => {
+    if (renamingPath && renamingPath !== node.path) {
+        activeRenameSubmitRef.current?.();
+    } else if (isRenaming) {
+        activeRenameSubmitRef.current?.();
+    }
+  };
+  
+  const handleRenameRequest = (e: React.SyntheticEvent) => {
+      e.preventDefault();
+      onRenameStart(node.path);
+  }
 
   const actionsMenu = (
     <DropdownMenu>
-        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-            <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0 opacity-50 hover:opacity-100 touch-device:opacity-100">
+        <DropdownMenuTrigger asChild>
+            <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 flex-shrink-0 opacity-50 hover:opacity-100 touch-device:opacity-100"
+                onPointerDown={handleMenuButtonPointerDown}
+            >
                 <MoreVertical className="h-4 w-4" />
             </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent onClick={(e) => e.stopPropagation()}>
-            <DropdownMenuItem onClick={() => onRenameStart(node.path)}>
+        <DropdownMenuContent
+            onCloseAutoFocus={(e) => {
+                // When we start renaming, we don't want the trigger to be re-focused.
+                // The focus will be managed by the RenameInput component.
+                if (renamingPath) {
+                    e.preventDefault();
+                }
+            }}
+        >
+            <DropdownMenuItem onSelect={() => onRenameStart(node.path)}>
                 <Pencil className="mr-2 h-4 w-4" />
                 Rename
             </DropdownMenuItem>
@@ -266,30 +330,32 @@ const FileTreeItem = ({
     </DropdownMenu>
   );
 
-  const handleClick = () => {
-    if(node.type === 'file') {
-        onSelectFile(node.file!);
-    } else {
-        setIsOpen(!isOpen);
-    }
-  };
-
   if (node.type === 'folder') {
     return (
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <div 
-          className="flex items-center group" 
+          className={cn(
+              "flex items-center group rounded-md",
+              !isRenaming && "hover:bg-accent/50",
+          )}
           ref={itemRef} 
           {...dragAndDropProps}
+          data-dnd-target="item"
           >
-          <CollapsibleTrigger asChild>
-              <button className="flex-1 w-full min-w-0" onClick={handleClick}>
-                  {triggerContent}
-              </button>
-          </CollapsibleTrigger>
-          <div className="pr-2">
-            {actionsMenu}
-          </div>
+           <CollapsibleTrigger asChild>
+             <button className='flex flex-1 w-full min-w-0' onClick={(e) => {
+                 if (isRenaming) {
+                     e.preventDefault();
+                     return;
+                 }
+                 setIsOpen(!isOpen);
+             }}>
+                {triggerContent}
+             </button>
+           </CollapsibleTrigger>
+            <div className="pr-2">
+                {actionsMenu}
+            </div>
         </div>
         <CollapsibleContent>
             <FileTreeBranch 
@@ -316,16 +382,17 @@ const FileTreeItem = ({
 
   return (
     <div 
-      className="flex items-center group" 
+      className={cn(
+          "flex items-center group rounded-md",
+          !isRenaming && "hover:bg-accent/50",
+      )}
       ref={itemRef} 
       {...dragAndDropProps}
+      data-dnd-target="item"
     >
-        <button
-            onClick={handleClick}
-            className={'flex-1 w-full min-w-0'}
-        >
-            {triggerContent}
-        </button>
+        <div className='flex flex-1 w-full min-w-0'>
+             {triggerContent}
+        </div>
         <div className="pr-2">
             {actionsMenu}
         </div>
