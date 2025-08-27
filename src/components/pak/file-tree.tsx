@@ -54,64 +54,69 @@ const getIcon = (name: string) => {
 const activeRenameSubmitRef: React.MutableRefObject<(() => void) | null> = { current: null };
 
 const RenameInput = ({ name, onRenameConfirm, onCancel, path }: { name: string; path: string; onRenameConfirm: (oldPath: string, newPath: string) => void; onCancel: () => void; }) => {
-    const [newName, setNewName] = useState(name);
-    const inputRef = useRef<HTMLInputElement>(null);
+  const [newName, setNewName] = useState(name);
+  const newNameRef = useRef(newName);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-    const handleSubmit = useCallback(() => {
-        const pathParts = path.split('/');
-        const oldName = pathParts.pop();
-        const trimmedNewName = newName.trim();
-        if (trimmedNewName && trimmedNewName !== oldName) {
-            pathParts.push(trimmedNewName);
-            onRenameConfirm(path, pathParts.join('/'));
-        } else {
-            onCancel();
-        }
-    }, [newName, path, onRenameConfirm, onCancel]);
+  // keep a stable submit handler that reads the latest value from ref
+  const handleSubmit = useCallback(() => {
+    const pathParts = path.split('/');
+    const oldName = pathParts.pop();
+    const trimmedNewName = newNameRef.current.trim();
+    if (trimmedNewName && trimmedNewName !== oldName) {
+      pathParts.push(trimmedNewName);
+      onRenameConfirm(path, pathParts.join('/'));
+    } else {
+      onCancel();
+    }
+  }, [path, onRenameConfirm, onCancel]);
 
-    useEffect(() => {
-        activeRenameSubmitRef.current = handleSubmit;
+  useEffect(() => {
+    activeRenameSubmitRef.current = handleSubmit;
 
-        const animationFrame = requestAnimationFrame(() => {
-            inputRef.current?.focus();
-            inputRef.current?.select();
-        });
+    const animationFrame = requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
         
-        const handleMouseDown = (event: MouseEvent) => {
-            if (inputRef.current && !inputRef.current.contains(event.target as Node)) {
-                handleSubmit();
-            }
-        };
-
-        document.addEventListener('mousedown', handleMouseDown);
-
-        return () => {
-            cancelAnimationFrame(animationFrame);
-            document.removeEventListener('mousedown', handleMouseDown);
-            if (activeRenameSubmitRef.current === handleSubmit) {
-                activeRenameSubmitRef.current = null;
-            }
-        };
-    }, [path, name, handleSubmit]);
-
-
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter') {
-            handleSubmit();
-        } else if (e.key === 'Escape') {
-            onCancel();
-        }
+    const handleMouseDown = (event: MouseEvent) => {
+      if (inputRef.current && !inputRef.current.contains(event.target as Node)) {
+        handleSubmit();
+      }
     };
 
-    return (
-        <Input
-            ref={inputRef}
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={handleKeyDown}
-            className="h-7 ml-1 flex-1"
-        />
-    );
+    document.addEventListener('mousedown', handleMouseDown);
+
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      document.removeEventListener('mousedown', handleMouseDown);
+      if (activeRenameSubmitRef.current === handleSubmit) {
+        activeRenameSubmitRef.current = null;
+      }
+    };
+  }, [path, name, handleSubmit]);
+
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSubmit();
+    } else if (e.key === 'Escape') {
+      onCancel();
+    }
+  };
+
+  return (
+    <Input
+      ref={inputRef}
+      value={newName}
+      onChange={(e) => {
+        setNewName(e.target.value);
+        newNameRef.current = e.target.value;
+      }}
+      onKeyDown={handleKeyDown}
+      className="h-7 ml-1 flex-1"
+    />
+  );
 };
 
 
