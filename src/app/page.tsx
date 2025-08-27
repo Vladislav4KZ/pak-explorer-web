@@ -839,6 +839,7 @@ export default function Home() {
     onAddFile: () => addFileInputRef.current?.click(),
     onAddFolder: () => addFolderInputRef.current?.click(),
     onNewFolder: () => setIsAddingFolder(true),
+    onExtract: handleExtractFile,
     addBatchEntries,
     setIsRenamingPak,
     setPakName: handlePakNameChange,

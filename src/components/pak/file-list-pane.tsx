@@ -24,7 +24,7 @@ interface FileListPaneProps {
   isRenamingPak: boolean;
 
   onSelectFile: (file: PakFileEntry) => void;
-  onRenameStart: (path: string) => void;
+  onRenameStart: (path: string | null) => void;
   onRenameConfirm: (oldPath: string, newPath: string) => void;
   onDeleteStart: (path: string, type: 'file' | 'folder') => void;
   onMove: (sourcePath: string, destPath: string) => void;
@@ -34,6 +34,7 @@ interface FileListPaneProps {
   onFolderDrop: (entry: FileSystemEntry, destPath?: string) => Promise<PakFileEntry[]>;
   onAddFile: () => void;
   onAddFolder: () => void;
+  onExtract: (file: PakFileEntry) => void;
   onNewFolder: () => void;
   addBatchEntries: (entries: PakFileEntry[]) => void;
   setIsRenamingPak: (isRenaming: boolean) => void;
@@ -66,6 +67,7 @@ export function FileListPane({
   setIsRenamingPak,
   setPakName,
   toast,
+  onExtract,
 }: FileListPaneProps) {
     
   const getPakBaseName = (name: string) => name.replace(/\.(pak|pk3|zip)$/i, '');
@@ -266,6 +268,7 @@ export function FileListPane({
               onPaste={onPaste}
               onFileDrop={onFileDrop}
               onFolderDrop={onFolderDrop}
+              onExtract={onExtract}
               addBatchEntries={addBatchEntries}
             />
           )}

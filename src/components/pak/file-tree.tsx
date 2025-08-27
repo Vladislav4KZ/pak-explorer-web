@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ChevronRight, File as FileIcon, Folder, ImageIcon, FileText, Pencil, Trash2, MoreVertical, Music, Copy, Scissors, ClipboardPaste } from 'lucide-react';
+import { ChevronRight, File as FileIcon, Folder, ImageIcon, FileText, Pencil, Trash2, MoreVertical, Music, Copy, Scissors, ClipboardPaste, Download } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import type { FileTree as FileTreeType, PakFileEntry, FileTreeNode, ClipboardItem } from '@/types';
@@ -31,6 +31,7 @@ interface FileTreeProps {
   onFileDrop: (file: File, destPath?: string) => Promise<PakFileEntry | null>;
   onFolderDrop: (entry: FileSystemEntry, destPath?: string) => Promise<PakFileEntry[]>;
   addBatchEntries: (entries: PakFileEntry[]) => void;
+  onExtract?: (file: PakFileEntry) => void;
 }
 
 const getIcon = (name: string) => {
@@ -129,6 +130,7 @@ const FileTreeItem = ({
   onFileDrop,
   onFolderDrop,
   addBatchEntries,
+  onExtract,
 }: {
   node: FileTreeNode;
   onSelectFile: (file: PakFileEntry) => void;
@@ -144,13 +146,14 @@ const FileTreeItem = ({
   onFileDrop: (file: File, destPath?: string) => Promise<PakFileEntry | null>;
   onFolderDrop: (entry: FileSystemEntry, destPath?: string) => Promise<PakFileEntry[]>;
   addBatchEntries: (entries: PakFileEntry[]) => void;
+  onExtract?: (file: PakFileEntry) => void;
 }) => {
+
   const [isOpen, setIsOpen] = useState(false);
   const [isDropTarget, setIsDropTarget] = useState(false);
   const itemRef = useRef<HTMLDivElement>(null);
   const isTouchDevice = typeof window !== 'undefined' && 'ontouchstart' in window;
   const isRenaming = renamingPath === node.path;
-  
 
   const handleDragStart = (e: React.DragEvent) => {
       e.dataTransfer.setData('application/pak-explorer-item', JSON.stringify({ path: node.path, type: node.type }));
@@ -302,11 +305,17 @@ const FileTreeItem = ({
                 }
             }}
         >
+            {node.type === 'file' && (
+              <DropdownMenuItem onSelect={() => node.file && onExtract && onExtract(node.file)}>
+                <Download className="mr-2 h-4 w-4" />
+                Extract
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => onRenameStart(node.path)}>
                 <Pencil className="mr-2 h-4 w-4" />
                 Rename
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => onClipboardAction('copy', node.type, node.path)}>
                 <Copy className="mr-2 h-4 w-4" />
                 Copy
@@ -400,7 +409,7 @@ const FileTreeItem = ({
   );
 };
 
-const FileTreeBranch = ({ tree, parentPath, ...props }: Omit<FileTreeProps, 'tree'> & { className?: string, isRoot?: boolean, parentPath?: string }) => {
+const FileTreeBranch = ({ tree, parentPath, ...props }: { tree: FileTreeType; parentPath?: string } & Omit<FileTreeProps, 'tree'> & { className?: string, isRoot?: boolean }) => {
     const sortedNodes = Object.values(tree).sort((a, b) => {
         if (a.type === 'folder' && b.type === 'file') return -1;
         if (a.type === 'file' && b.type === 'folder') return 1;
