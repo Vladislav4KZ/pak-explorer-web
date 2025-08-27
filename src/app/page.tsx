@@ -827,7 +827,11 @@ export default function Home() {
     renamingPath,
     clipboard,
     isRenamingPak,
-    onSelectFile: setSelectedFile,
+    onSelectFile: (file: PakFileEntry) => {
+      setSelectedFile(file);
+      // Close mobile sidebar when a file is selected so preview is visible
+      if (isMobile) setIsMobileMenuOpen(false);
+    },
     onRenameStart: setRenamingPath,
     onRenameConfirm: handleRenameConfirm,
     onDeleteStart: (path: string, type: 'file' | 'folder') => { setDeletingPath(path); setDeletingType(type); },
